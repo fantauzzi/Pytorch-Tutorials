@@ -49,7 +49,6 @@ test_loader = torch.utils.data.DataLoader(
     ])),
     batch_size=test_batch_size, shuffle=True, **kwargs)
 
-"""
 # Count items in loaded datasets
 test_data_iter = iter(test_loader)
 test_set_size = sum(len(batch[0]) for batch in test_data_iter)
@@ -61,7 +60,6 @@ print("- Training-set:\t\t{}".format(training_set_size))
 print("- Test-set:\t\t{}".format(test_set_size))
 # TODO add a validation set
 # print("- Validation-set:\t{}".format(len(data.validation.labels)))
-"""
 
 # We know that MNIST images are 28 pixels in each dimension.
 img_size = 28
@@ -115,10 +113,43 @@ images = images.numpy()[0:9]
 labels = labels.numpy()[0:9]
 plot_images(images, labels)
 
+conv1_kernel_size = 5
+# See https://www.tensorflow.org/versions/r0.12/api_docs/python/nn/convolution
+conv1_pad = int((conv1_kernel_size - 1) / 2)
+assert ((conv1_kernel_size - 1) % 2 == 0)
+conv2_kernel_size = 5
+conv2_pad = int((conv2_kernel_size - 1) / 2)
 
-class Net(nn.Module):
+
+# Pythorch sequential model doesn't include a layer for flattening, oddly enough, so we make our own
+class Flatten(nn.Module):
+    def forward(self, x):
+        return x.view(x.size(0), -1)
+
+
+sequential_model = nn.Sequential(
+    nn.Conv2d(in_channels=1, out_channels=16, kernel_size=conv1_kernel_size, padding=conv1_pad),
+    nn.ReLU(),
+    nn.MaxPool2d(kernel_size=2),
+    nn.Conv2d(in_channels=16, out_channels=16, kernel_size=conv2_kernel_size, padding=conv2_pad),
+    nn.ReLU(),
+    nn.MaxPool2d(kernel_size=2),
+    Flatten(),
+    nn.Linear(in_features=784, out_features=128),
+    nn.ReLU(),
+    nn.Linear(in_features=128, out_features=num_classes),
+    nn.CrossEntropyLoss()
+)
+
+if cuda:
+    sequential_model = sequential_model.cuda()
+
+optimizer = optim.Adam(params=sequential_model.parameters(), lr=1e-3)
+
+
+class FunctionalModel(nn.Module):
     def __init__(self):
-        super(Net, self).__init__()
+        super(FunctionalModel, self).__init__()
 
         def get_conv_weight_and_bias(n_input, n_output, k1, k2):
             w = Parameter(torch.Tensor(n_output, n_input, k1, k2))
@@ -157,7 +188,7 @@ class Net(nn.Module):
         x = F.max_pool2d(F.relu(x), 2)
         x = F.conv2d(input=x, weight=self.conv2_w, bias=self.conv2_b, padding=self.conv2_pad)
         x = F.max_pool2d(F.relu(x), 2)
-        x = x.view(-1, 784)  # Flatten
+        x = x.view(x.size(0), -1)  # Flatten but keep the same batch size
         x = F.linear(input=x, weight=self.fc1_w, bias=self.fc1_b)
         x = F.relu(x)
         x = F.linear(input=x, weight=self.fc2_w, bias=self.fc2_b)
@@ -165,7 +196,7 @@ class Net(nn.Module):
         return x
 
 
-model = Net()
+model = FunctionalModel()
 if cuda:
     model.cuda()
 
@@ -212,6 +243,7 @@ for epoch in range(1):
     train(epoch)
     test()
 
+# Plot 9 images correctly classified, along with their classification
 sample_data_iter = iter(train_loader)
 images, labels = sample_data_iter.next()
 if cuda:
@@ -224,6 +256,7 @@ one_hot_pred = model(images)
 predicted = one_hot_pred.data.max(1, keepdim=True)[1]
 plot_images(array_from_variable(images), cls_true=labels, cls_pred=array_from_tensor(predicted))
 
+# Plot 9 images that have been misclassified, along with their (incorrect) classification and correct class
 test_data_iter = iter(test_loader)
 misclassified, prediction, correct_cls = [], [], []
 for images, labels in test_data_iter:
