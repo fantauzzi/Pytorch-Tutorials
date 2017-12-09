@@ -362,3 +362,50 @@ print(sequential_model)
 
 plot_conv_weights(sequential_model[0].weight.data.cpu().numpy())
 plot_conv_weights(loaded_model.conv2_w.data.cpu().numpy())
+
+
+def plot_conv_output(values):
+    # Number of filters used in the conv. layer.
+    num_filters = values.shape[1]
+
+    # Number of grids to plot.
+    # Rounded-up, square-root of the number of filters.
+    num_grids = math.ceil(math.sqrt(num_filters))
+
+    # Create figure with a grid of sub-plots.
+    fig, axes = plt.subplots(num_grids, num_grids)
+
+    # Plot the output images of all the filters.
+    for i, ax in enumerate(axes.flat):
+        # Only plot the images for valid filters.
+        if i < num_filters:
+            # Get the output image of using the i'th filter.
+            img = values[0, i, :, :]
+
+            # Plot image.
+            ax.imshow(img, interpolation='nearest', cmap='binary')
+
+        # Remove ticks from the plot.
+        ax.set_xticks([])
+        ax.set_yticks([])
+
+    # Ensure the plot is shown correctly with multiple plots
+    # in a single Notebook cell.
+    plt.show()
+
+
+# Change [0:1] to [0:3] to access the output of the second convolutional layer instead
+sub_model = nn.Sequential(*list(sequential_model.children())[0:1])
+
+print(sub_model)
+
+sample_data_iter = iter(train_loader)
+images, labels = sample_data_iter.next()
+if cuda:
+    images = images.cuda()
+images = images[0:1]
+labels = labels.numpy()[0:1]
+sub_model.eval()  # TODO is it needed?
+images = Variable(images, volatile=True)
+conv1_output = sub_model(images)
+plot_conv_output(conv1_output.data.cpu().numpy())
