@@ -5,7 +5,6 @@ Image('images/02_network_flowchart.png')
 Image('images/02_convolution.png')
 
 # %matplotlib inline
-import itertools
 import matplotlib.pyplot as plt
 import torch
 from torchvision import datasets, transforms
@@ -14,7 +13,6 @@ import torch.nn.functional as F
 from torch.nn.parameter import Parameter
 import torch.optim as optim
 from torch.autograd import Variable
-import numpy as np
 import math
 
 plt.ioff()
@@ -22,6 +20,43 @@ cuda = torch.cuda.is_available()
 
 batch_size = 128
 test_batch_size = 128
+epochs = 1
+
+
+def train(epoch, model, train_loader):
+    model.train()
+    for batch_idx, (data, target) in enumerate(train_loader):
+        if cuda:
+            data, target = data.cuda(), target.cuda()
+        data, target = Variable(data), Variable(target)
+        optimizer.zero_grad()
+        prediction = model(data)
+        loss = F.cross_entropy(input=prediction, target=target)
+        loss.backward()
+        optimizer.step()
+        if batch_idx % 100 == 0:
+            print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
+                epoch, batch_idx * len(data), len(train_loader.dataset),
+                       100. * batch_idx / len(train_loader), loss.data[0]))
+
+
+def test(model):
+    model.eval()
+    test_loss = 0
+    correct = 0
+    for data, target in test_loader:
+        if cuda:
+            data, target = data.cuda(), target.cuda()
+        data, target = Variable(data, volatile=True), Variable(target)
+        prediction = model(data)
+        test_loss += F.cross_entropy(prediction, target, size_average=False).data[0]  # sum up batch loss
+        pred = prediction.data.max(1, keepdim=True)[1]  # get the index of the max log-probability
+        correct += pred.eq(target.data.view_as(pred)).cpu().sum()
+
+    test_loss /= len(test_loader.dataset)
+    print('\nTest set: Average loss: {:.4f}, Accuracy: {}/{} ({:.0f}%)\n'.format(
+        test_loss, correct, len(test_loader.dataset),
+        100. * correct / len(test_loader.dataset)))
 
 
 def array_from_variable(var):
@@ -50,14 +85,14 @@ test_loader = torch.utils.data.DataLoader(
     batch_size=test_batch_size, shuffle=True, **kwargs)
 
 # Count items in loaded datasets
-test_data_iter = iter(test_loader)
+"""test_data_iter = iter(test_loader)
 test_set_size = sum(len(batch[0]) for batch in test_data_iter)
 training_data_iter = iter(train_loader)
 training_set_size = sum(len(batch[0]) for batch in training_data_iter)
 
 print("Size of:")
 print("- Training-set:\t\t{}".format(training_set_size))
-print("- Test-set:\t\t{}".format(test_set_size))
+print("- Test-set:\t\t{}".format(test_set_size))"""
 # TODO add a validation set
 # print("- Validation-set:\t{}".format(len(data.validation.labels)))
 
@@ -137,14 +172,21 @@ sequential_model = nn.Sequential(
     Flatten(),
     nn.Linear(in_features=784, out_features=128),
     nn.ReLU(),
-    nn.Linear(in_features=128, out_features=num_classes),
-    nn.CrossEntropyLoss()
+    nn.Linear(in_features=128, out_features=num_classes)# ,
+    # nn.CrossEntropyLoss()
 )
 
 if cuda:
     sequential_model = sequential_model.cuda()
 
 optimizer = optim.Adam(params=sequential_model.parameters(), lr=1e-3)
+
+
+print('Training sequential model')
+
+for epoch in range(epochs):
+    train(epoch, sequential_model, train_loader)
+    test(sequential_model)
 
 
 class FunctionalModel(nn.Module):
@@ -192,56 +234,21 @@ class FunctionalModel(nn.Module):
         x = F.linear(input=x, weight=self.fc1_w, bias=self.fc1_b)
         x = F.relu(x)
         x = F.linear(input=x, weight=self.fc2_w, bias=self.fc2_b)
-        x = F.log_softmax(x)
+        # x = F.log_softmax(input=x, dim=0)
         return x
 
 
-model = FunctionalModel()
+functional_model = FunctionalModel()
 if cuda:
-    model.cuda()
+    functional_model.cuda()
 
-optimizer = optim.Adam(params=model.parameters(), lr=1e-3)
+optimizer = optim.Adam(params=functional_model.parameters(), lr=1e-3)
 
+print('Training functional model')
 
-def train(epoch):
-    model.train()
-    for batch_idx, (data, target) in enumerate(train_loader):
-        if cuda:
-            data, target = data.cuda(), target.cuda()
-        data, target = Variable(data), Variable(target)
-        optimizer.zero_grad()
-        prediction = model(data)
-        loss = F.cross_entropy(input=prediction, target=target)
-        loss.backward()
-        optimizer.step()
-        if batch_idx % 100 == 0:
-            print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
-                epoch, batch_idx * len(data), len(train_loader.dataset),
-                       100. * batch_idx / len(train_loader), loss.data[0]))
-
-
-def test():
-    model.eval()
-    test_loss = 0
-    correct = 0
-    for data, target in test_loader:
-        if cuda:
-            data, target = data.cuda(), target.cuda()
-        data, target = Variable(data, volatile=True), Variable(target)
-        prediction = model(data)
-        test_loss += F.cross_entropy(prediction, target, size_average=False).data[0]  # sum up batch loss
-        pred = prediction.data.max(1, keepdim=True)[1]  # get the index of the max log-probability
-        correct += pred.eq(target.data.view_as(pred)).cpu().sum()
-
-    test_loss /= len(test_loader.dataset)
-    print('\nTest set: Average loss: {:.4f}, Accuracy: {}/{} ({:.0f}%)\n'.format(
-        test_loss, correct, len(test_loader.dataset),
-        100. * correct / len(test_loader.dataset)))
-
-
-for epoch in range(1):
-    train(epoch)
-    test()
+for epoch in range(epochs):
+    train(epoch, functional_model, train_loader)
+    test(functional_model)
 
 # Plot 9 images correctly classified, along with their classification
 sample_data_iter = iter(train_loader)
@@ -250,9 +257,9 @@ if cuda:
     images = images.cuda()
 images = images[0:9]
 labels = labels.numpy()[0:9]
-model.eval()  # TODO is it needed?
+functional_model.eval()  # TODO is it needed?
 images = Variable(images, volatile=True)
-one_hot_pred = model(images)
+one_hot_pred = functional_model(images)
 predicted = one_hot_pred.data.max(1, keepdim=True)[1]
 plot_images(array_from_variable(images), cls_true=labels, cls_pred=array_from_tensor(predicted))
 
@@ -263,7 +270,7 @@ for images, labels in test_data_iter:
     if cuda:
         images = images.cuda()
     images = Variable(images, volatile=True)
-    one_hot_pred = model(images)
+    one_hot_pred = functional_model(images)
     predicted = array_from_tensor(one_hot_pred.data.max(1, keepdim=True)[1]).squeeze()
     incorrect = (predicted != labels.numpy())
     misclassified.extend(array_from_variable(images)[incorrect])
