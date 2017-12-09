@@ -14,6 +14,7 @@ from torch.nn.parameter import Parameter
 import torch.optim as optim
 from torch.autograd import Variable
 import math
+import numpy as np
 
 plt.ioff()
 cuda = torch.cuda.is_available()
@@ -23,7 +24,15 @@ test_batch_size = 128
 epochs = 1
 
 
-def train(epoch, model, train_loader):
+def array_from_variable(var):
+    return var.cpu().data.numpy()
+
+
+def array_from_tensor(tensor):
+    return tensor.cpu().numpy()
+
+
+def train(epoch, model, optimizer, train_loader):
     model.train()
     for batch_idx, (data, target) in enumerate(train_loader):
         if cuda:
@@ -40,7 +49,7 @@ def train(epoch, model, train_loader):
                        100. * batch_idx / len(train_loader), loss.data[0]))
 
 
-def test(model):
+def test(model, test_loader):
     model.eval()
     test_loss = 0
     correct = 0
@@ -59,16 +68,46 @@ def test(model):
         100. * correct / len(test_loader.dataset)))
 
 
-def array_from_variable(var):
-    return var.cpu().data.numpy()
+def plot_classified_sample(train_loader, model):
+    sample_data_iter = iter(train_loader)
+    images, labels = sample_data_iter.next()
+    if cuda:
+        images = images.cuda()
+    images = images[0:9]
+    labels = labels.numpy()[0:9]
+    model.eval()  # TODO is it needed?
+    images = Variable(images, volatile=True)
+    one_hot_pred = model(images)
+    predicted = one_hot_pred.data.max(1, keepdim=True)[1]
+
+    plot_images(array_from_variable(images), cls_true=labels, cls_pred=array_from_tensor(predicted))
 
 
-def array_from_tensor(tensor):
-    return tensor.cpu().numpy()
+def plot_misclassified_sample(test_loader, model):
+    test_data_iter = iter(test_loader)
+    misclassified, prediction, correct_cls = [], [], []
+    for images, labels in test_data_iter:
+        if cuda:
+            images = images.cuda()
+        images = Variable(images, volatile=True)
+        one_hot_pred = model(images)
+        predicted = array_from_tensor(one_hot_pred.data.max(1, keepdim=True)[1]).squeeze()
+        incorrect = (predicted != labels.numpy())
+        misclassified.extend(array_from_variable(images)[incorrect])
+        prediction.extend(predicted[incorrect])
+        correct_cls.extend(labels.numpy()[incorrect])
+        if len(misclassified) >= 9:
+            break
+
+    plot_images(images=misclassified[0:9],
+                cls_true=correct_cls[0:9],
+                cls_pred=prediction[0:9])
 
 
-# TODO check if you should load the TF dataset instead
+''' Set the dataset loaders'''
+
 kwargs = {'num_workers': 1, 'pin_memory': True} if cuda else {}
+
 train_loader = torch.utils.data.DataLoader(
     datasets.MNIST('../data', train=True, download=True,
                    transform=transforms.Compose([
@@ -148,6 +187,8 @@ images = images.numpy()[0:9]
 labels = labels.numpy()[0:9]
 plot_images(images, labels)
 
+''' Define a sequential model.'''
+
 conv1_kernel_size = 5
 # See https://www.tensorflow.org/versions/r0.12/api_docs/python/nn/convolution
 conv1_pad = int((conv1_kernel_size - 1) / 2)
@@ -156,10 +197,14 @@ conv2_kernel_size = 5
 conv2_pad = int((conv2_kernel_size - 1) / 2)
 
 
-# Pythorch sequential model doesn't include a layer for flattening, oddly enough, so we make our own
+# Pytorch sequential model doesn't include a layer for flattening, oddly enough, so we make our own
 class Flatten(nn.Module):
+
     def forward(self, x):
         return x.view(x.size(0), -1)
+
+    def __repr__(self):
+        return 'Flatten()'
 
 
 sequential_model = nn.Sequential(
@@ -172,8 +217,7 @@ sequential_model = nn.Sequential(
     Flatten(),
     nn.Linear(in_features=784, out_features=128),
     nn.ReLU(),
-    nn.Linear(in_features=128, out_features=num_classes)# ,
-    # nn.CrossEntropyLoss()
+    nn.Linear(in_features=128, out_features=num_classes)
 )
 
 if cuda:
@@ -181,12 +225,18 @@ if cuda:
 
 optimizer = optim.Adam(params=sequential_model.parameters(), lr=1e-3)
 
-
 print('Training sequential model')
 
 for epoch in range(epochs):
-    train(epoch, sequential_model, train_loader)
-    test(sequential_model)
+    train(epoch, sequential_model, optimizer, train_loader)
+    test(sequential_model, test_loader)
+
+plot_classified_sample(train_loader, sequential_model)
+
+plot_misclassified_sample(test_loader, sequential_model)
+
+
+''' Define a functional model.'''
 
 
 class FunctionalModel(nn.Module):
@@ -210,13 +260,11 @@ class FunctionalModel(nn.Module):
             return w, b
 
         conv1_kernel_size = 5
-        # See https://www.tensorflow.org/versions/r0.12/api_docs/python/nn/convolution
-        conv1_pad = int((conv1_kernel_size - 1) / 2)
         assert ((conv1_kernel_size - 1) % 2 == 0)
-        self.conv1_pad = conv1_pad
+        self.conv1_pad = int((conv1_kernel_size - 1) / 2)
         conv2_kernel_size = 5
-        conv2_pad = int((conv2_kernel_size - 1) / 2)
-        self.conv2_pad = conv2_pad
+        assert ((conv2_kernel_size - 1) % 2 == 0)
+        self.conv2_pad = int((conv2_kernel_size - 1) / 2)
 
         self.conv1_w, self.conv1_b = get_conv_weight_and_bias(n_input=1, n_output=16, k1=conv1_kernel_size,
                                                               k2=conv1_kernel_size)
@@ -234,7 +282,6 @@ class FunctionalModel(nn.Module):
         x = F.linear(input=x, weight=self.fc1_w, bias=self.fc1_b)
         x = F.relu(x)
         x = F.linear(input=x, weight=self.fc2_w, bias=self.fc2_b)
-        # x = F.log_softmax(input=x, dim=0)
         return x
 
 
@@ -247,38 +294,71 @@ optimizer = optim.Adam(params=functional_model.parameters(), lr=1e-3)
 print('Training functional model')
 
 for epoch in range(epochs):
-    train(epoch, functional_model, train_loader)
-    test(functional_model)
+    train(epoch, functional_model, optimizer, train_loader)
+    test(functional_model, test_loader)
 
 # Plot 9 images correctly classified, along with their classification
-sample_data_iter = iter(train_loader)
-images, labels = sample_data_iter.next()
-if cuda:
-    images = images.cuda()
-images = images[0:9]
-labels = labels.numpy()[0:9]
-functional_model.eval()  # TODO is it needed?
-images = Variable(images, volatile=True)
-one_hot_pred = functional_model(images)
-predicted = one_hot_pred.data.max(1, keepdim=True)[1]
-plot_images(array_from_variable(images), cls_true=labels, cls_pred=array_from_tensor(predicted))
+plot_classified_sample(train_loader, functional_model)
+
 
 # Plot 9 images that have been misclassified, along with their (incorrect) classification and correct class
-test_data_iter = iter(test_loader)
-misclassified, prediction, correct_cls = [], [], []
-for images, labels in test_data_iter:
-    if cuda:
-        images = images.cuda()
-    images = Variable(images, volatile=True)
-    one_hot_pred = functional_model(images)
-    predicted = array_from_tensor(one_hot_pred.data.max(1, keepdim=True)[1]).squeeze()
-    incorrect = (predicted != labels.numpy())
-    misclassified.extend(array_from_variable(images)[incorrect])
-    prediction.extend(predicted[incorrect])
-    correct_cls.extend(labels.numpy()[incorrect])
-    if len(misclassified) >= 9:
-        break
+plot_misclassified_sample(test_loader, functional_model)
 
-plot_images(images=misclassified[0:9],
-            cls_true=correct_cls[0:9],
-            cls_pred=prediction[0:9])
+saved_model_path = './model.p'
+torch.save(functional_model.state_dict(), saved_model_path)
+
+del functional_model
+
+loaded_model = FunctionalModel()
+if cuda:
+    loaded_model = loaded_model.cuda()
+state_dict = torch.load(saved_model_path)
+loaded_model.load_state_dict(state_dict)
+
+plot_classified_sample(train_loader, loaded_model)
+
+
+def plot_conv_weights(weights, input_channel=0):
+    # Get the lowest and highest values for the weights.
+    # This is used to correct the colour intensity across
+    # the images so they can be compared with each other.
+    w_min = np.min(weights)
+    w_max = np.max(weights)
+
+    # Number of filters used in the conv. layer.
+    num_filters = weights.shape[0]
+
+    # Number of grids to plot.
+    # Rounded-up, square-root of the number of filters.
+    num_grids = math.ceil(math.sqrt(num_filters))
+
+    # Create figure with a grid of sub-plots.
+    fig, axes = plt.subplots(num_grids, num_grids)
+
+    # Plot all the filter-weights.
+    for i, ax in enumerate(axes.flat):
+        # Only plot the valid filter-weights.
+        if i < num_filters:
+            # Get the weights for the i'th filter of the input channel.
+            # See new_conv_layer() for details on the format
+            # of this 4-dim tensor.
+            img = weights[i, input_channel, :, :]
+            # img = weights[:, :, input_channel, i]
+
+            # Plot image.
+            ax.imshow(img, vmin=w_min, vmax=w_max,
+                      interpolation='nearest', cmap='seismic')
+
+        # Remove ticks from the plot.
+        ax.set_xticks([])
+        ax.set_yticks([])
+
+    # Ensure the plot is shown correctly with multiple plots
+    # in a single Notebook cell.
+    plt.show()
+
+
+print(sequential_model)
+
+plot_conv_weights(sequential_model[0].weight.data.cpu().numpy())
+plot_conv_weights(loaded_model.conv2_w.data.cpu().numpy())
