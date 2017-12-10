@@ -9,11 +9,11 @@ import math
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-from torchvision import datasets, transforms
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.nn.parameter import Parameter
 import torch.optim as optim
+from torch.nn.parameter import Parameter
+from torchvision import datasets, transforms
 from torch.autograd import Variable
 
 plt.ioff()
@@ -110,7 +110,7 @@ def plot_misclassified_sample(dataset_loader, model):
 kwargs = {'num_workers': 1, 'pin_memory': True} if cuda else {}
 
 train_loader = torch.utils.data.DataLoader(
-    datasets.MNIST('../data', train=True, download=True,
+    datasets.MNIST('./data', train=True, download=True,
                    transform=transforms.Compose([
                        transforms.ToTensor(),
                        transforms.Normalize((0.1307,), (0.3081,))
@@ -118,7 +118,7 @@ train_loader = torch.utils.data.DataLoader(
     batch_size=batch_size, shuffle=True, **kwargs)
 
 test_loader = torch.utils.data.DataLoader(
-    datasets.MNIST('../data', train=False, transform=transforms.Compose([
+    datasets.MNIST('./data', train=False, transform=transforms.Compose([
         transforms.ToTensor(),
         transforms.Normalize((0.1307,), (0.3081,))
     ])),
@@ -179,7 +179,9 @@ def plot_images(images, cls_true, cls_pred=None):
     plt.show()
 
 
-# Plot a sample of test images with their actual class using our helper-function above.
+''' Fetch nine images from the training-set and plot them. Note they can differ from run to run, as the
+training-set gets shuffled '''
+
 sample_data_iter = iter(train_loader)
 images, labels = sample_data_iter.next()
 images = images.numpy()[0:9]
