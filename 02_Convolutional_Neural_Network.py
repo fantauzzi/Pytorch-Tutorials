@@ -5,7 +5,9 @@ Image('images/02_network_flowchart.png')
 Image('images/02_convolution.png')
 
 # %matplotlib inline
+import math
 import matplotlib.pyplot as plt
+import numpy as np
 import torch
 from torchvision import datasets, transforms
 import torch.nn as nn
@@ -13,15 +15,13 @@ import torch.nn.functional as F
 from torch.nn.parameter import Parameter
 import torch.optim as optim
 from torch.autograd import Variable
-import math
-import numpy as np
 
 plt.ioff()
 cuda = torch.cuda.is_available()
 
 batch_size = 128
 test_batch_size = 128
-epochs = 1
+epochs = 4
 
 
 def array_from_variable(var):
@@ -50,17 +50,18 @@ def train(epoch, model, optimizer, train_loader):
 
 
 def test(model, test_loader):
-    model.eval()
+    model.eval()  # Actually necessary if the model includes layers like Dropout or BatchNorm
     test_loss = 0
     correct = 0
     for data, target in test_loader:
         if cuda:
             data, target = data.cuda(), target.cuda()
+        # Variable below set to volatile for efficiency, as the model here is used for inference only, no training
         data, target = Variable(data, volatile=True), Variable(target)
         prediction = model(data)
         test_loss += F.cross_entropy(prediction, target, size_average=False).data[0]  # sum up batch loss
-        pred = prediction.data.max(1, keepdim=True)[1]  # get the index of the max log-probability
-        correct += pred.eq(target.data.view_as(pred)).cpu().sum()
+        pred_idx = prediction.data.max(1, keepdim=True)[1]  # get the index of the max score
+        correct += pred_idx.eq(target.data.view_as(pred_idx)).cpu().sum()
 
     test_loss /= len(test_loader.dataset)
     print('\nTest set: Average loss: {:.4f}, Accuracy: {}/{} ({:.0f}%)\n'.format(
@@ -68,30 +69,30 @@ def test(model, test_loader):
         100. * correct / len(test_loader.dataset)))
 
 
-def plot_classified_sample(train_loader, model):
-    sample_data_iter = iter(train_loader)
-    images, labels = sample_data_iter.next()
-    if cuda:
-        images = images.cuda()
+def plot_classified_sample(dataset_loader, model):
+    data_iter = iter(dataset_loader)
+    images, labels = data_iter.next()
     images = images[0:9]
     labels = labels.numpy()[0:9]
-    model.eval()  # TODO is it needed?
+    if cuda:
+        images = images.cuda()
     images = Variable(images, volatile=True)
-    one_hot_pred = model(images)
-    predicted = one_hot_pred.data.max(1, keepdim=True)[1]
+    pred_scores = model(images)
+    predicted = pred_scores.data.max(1, keepdim=True)[1]
 
     plot_images(array_from_variable(images), cls_true=labels, cls_pred=array_from_tensor(predicted))
 
 
-def plot_misclassified_sample(test_loader, model):
-    test_data_iter = iter(test_loader)
+def plot_misclassified_sample(dataset_loader, model):
+    data_iter = iter(dataset_loader)
     misclassified, prediction, correct_cls = [], [], []
-    for images, labels in test_data_iter:
+    # Fetch enough samples from the dataset to collect at least 9 misclassified samples
+    for images, labels in data_iter:
         if cuda:
             images = images.cuda()
         images = Variable(images, volatile=True)
-        one_hot_pred = model(images)
-        predicted = array_from_tensor(one_hot_pred.data.max(1, keepdim=True)[1]).squeeze()
+        pred_scores = model(images)
+        predicted = array_from_tensor(pred_scores.data.max(1, keepdim=True)[1]).squeeze()
         incorrect = (predicted != labels.numpy())
         misclassified.extend(array_from_variable(images)[incorrect])
         prediction.extend(predicted[incorrect])
@@ -123,17 +124,15 @@ test_loader = torch.utils.data.DataLoader(
     ])),
     batch_size=test_batch_size, shuffle=True, **kwargs)
 
-# Count items in loaded datasets
-"""test_data_iter = iter(test_loader)
+# Count items in datasets
+test_data_iter = iter(test_loader)
 test_set_size = sum(len(batch[0]) for batch in test_data_iter)
 training_data_iter = iter(train_loader)
 training_set_size = sum(len(batch[0]) for batch in training_data_iter)
 
 print("Size of:")
 print("- Training-set:\t\t{}".format(training_set_size))
-print("- Test-set:\t\t{}".format(test_set_size))"""
-# TODO add a validation set
-# print("- Validation-set:\t{}".format(len(data.validation.labels)))
+print("- Test-set:\t\t{}".format(test_set_size))
 
 # We know that MNIST images are 28 pixels in each dimension.
 img_size = 28
@@ -190,14 +189,13 @@ plot_images(images, labels)
 ''' Define a sequential model.'''
 
 conv1_kernel_size = 5
-# See https://www.tensorflow.org/versions/r0.12/api_docs/python/nn/convolution
 conv1_pad = int((conv1_kernel_size - 1) / 2)
 assert ((conv1_kernel_size - 1) % 2 == 0)
 conv2_kernel_size = 5
 conv2_pad = int((conv2_kernel_size - 1) / 2)
 
 
-# Pytorch sequential model doesn't include a layer for flattening, oddly enough, so we make our own
+# Pytorch sequential model doesn't include a layer for flattening, oddly enough; so we make our own.
 class Flatten(nn.Module):
 
     def forward(self, x):
@@ -211,11 +209,11 @@ sequential_model = nn.Sequential(
     nn.Conv2d(in_channels=1, out_channels=16, kernel_size=conv1_kernel_size, padding=conv1_pad),
     nn.ReLU(),
     nn.MaxPool2d(kernel_size=2),
-    nn.Conv2d(in_channels=16, out_channels=16, kernel_size=conv2_kernel_size, padding=conv2_pad),
+    nn.Conv2d(in_channels=16, out_channels=36, kernel_size=conv2_kernel_size, padding=conv2_pad),
     nn.ReLU(),
     nn.MaxPool2d(kernel_size=2),
     Flatten(),
-    nn.Linear(in_features=784, out_features=128),
+    nn.Linear(in_features=1764, out_features=128),  # 36 channels times 7x7 pictures = 1764 input features
     nn.ReLU(),
     nn.Linear(in_features=128, out_features=num_classes)
 )
@@ -268,9 +266,9 @@ class FunctionalModel(nn.Module):
 
         self.conv1_w, self.conv1_b = get_conv_weight_and_bias(n_input=1, n_output=16, k1=conv1_kernel_size,
                                                               k2=conv1_kernel_size)
-        self.conv2_w, self.conv2_b = get_conv_weight_and_bias(n_input=16, n_output=16, k1=conv2_kernel_size,
+        self.conv2_w, self.conv2_b = get_conv_weight_and_bias(n_input=16, n_output=36, k1=conv2_kernel_size,
                                                               k2=conv2_kernel_size)
-        self.fc1_w, self.fc1_b = get_linear_weight_and_bias(n_input=784, n_output=128)
+        self.fc1_w, self.fc1_b = get_linear_weight_and_bias(n_input=1764, n_output=128)
         self.fc2_w, self.fc2_b = get_linear_weight_and_bias(n_input=128, n_output=num_classes)
 
     def forward(self, x):
@@ -300,7 +298,6 @@ for epoch in range(epochs):
 # Plot 9 images correctly classified, along with their classification
 plot_classified_sample(train_loader, functional_model)
 
-
 # Plot 9 images that have been misclassified, along with their (incorrect) classification and correct class
 plot_misclassified_sample(test_loader, functional_model)
 
@@ -314,6 +311,7 @@ if cuda:
     loaded_model = loaded_model.cuda()
 state_dict = torch.load(saved_model_path)
 loaded_model.load_state_dict(state_dict)
+loaded_model.eval()
 
 plot_classified_sample(train_loader, loaded_model)
 
@@ -401,11 +399,21 @@ print(sub_model)
 
 sample_data_iter = iter(train_loader)
 images, labels = sample_data_iter.next()
+
+
+def plot_image(image):
+    plt.imshow(image.reshape(img_shape),
+               interpolation='nearest',
+               cmap='binary')
+
+    plt.show()
+
+
+plot_image(images[0].numpy())
+
 if cuda:
     images = images.cuda()
 images = images[0:1]
-labels = labels.numpy()[0:1]
-sub_model.eval()  # TODO is it needed?
 images = Variable(images, volatile=True)
 conv1_output = sub_model(images)
 plot_conv_output(conv1_output.data.cpu().numpy())
