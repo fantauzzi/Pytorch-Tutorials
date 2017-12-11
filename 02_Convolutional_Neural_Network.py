@@ -303,7 +303,7 @@ plot_classified_sample(train_loader, functional_model)
 # Plot 9 images that have been misclassified, along with their (incorrect) classification and correct class
 plot_misclassified_sample(test_loader, functional_model)
 
-saved_model_path = './model.p'
+saved_model_path = 'model.p'
 torch.save(functional_model.state_dict(), saved_model_path)
 
 del functional_model
