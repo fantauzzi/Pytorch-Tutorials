@@ -6,8 +6,10 @@ Image('images/02_convolution.png')
 
 # %matplotlib inline
 import math
+import sys
 import matplotlib.pyplot as plt
 import numpy as np
+from tqdm import tqdm
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -18,6 +20,7 @@ from torch.autograd import Variable
 
 plt.ioff()
 cuda = torch.cuda.is_available()
+
 
 batch_size = 128
 test_batch_size = 128
@@ -30,43 +33,6 @@ def array_from_variable(var):
 
 def array_from_tensor(tensor):
     return tensor.cpu().numpy()
-
-
-def train(epoch, model, optimizer, train_loader):
-    model.train()
-    for batch_idx, (data, target) in enumerate(train_loader):
-        if cuda:
-            data, target = data.cuda(), target.cuda()
-        data, target = Variable(data), Variable(target)
-        optimizer.zero_grad()
-        prediction = model(data)
-        loss = F.cross_entropy(input=prediction, target=target)
-        loss.backward()
-        optimizer.step()
-        if batch_idx % 100 == 0:
-            print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
-                epoch, batch_idx * len(data), len(train_loader.dataset),
-                       100. * batch_idx / len(train_loader), loss.data[0]))
-
-
-def test(model, test_loader):
-    model.eval()  # Actually necessary if the model includes layers like Dropout or BatchNorm
-    test_loss = 0
-    correct = 0
-    for data, target in test_loader:
-        if cuda:
-            data, target = data.cuda(), target.cuda()
-        # Variable below set to volatile for efficiency, as the model here is used for inference only, no training
-        data, target = Variable(data, volatile=True), Variable(target)
-        prediction = model(data)
-        test_loss += F.cross_entropy(prediction, target, size_average=False).data[0]  # sum up batch loss
-        pred_idx = prediction.data.max(1, keepdim=True)[1]  # get the index of the max score
-        correct += pred_idx.eq(target.data.view_as(pred_idx)).cpu().sum()
-
-    test_loss /= len(test_loader.dataset)
-    print('\nTest set: Average loss: {:.4f}, Accuracy: {}/{} ({:.0f}%)\n'.format(
-        test_loss, correct, len(test_loader.dataset),
-        100. * correct / len(test_loader.dataset)))
 
 
 def plot_classified_sample(dataset_loader, model):
@@ -125,10 +91,8 @@ test_loader = torch.utils.data.DataLoader(
     batch_size=test_batch_size, shuffle=True, **kwargs)
 
 # Count items in datasets
-test_data_iter = iter(test_loader)
-test_set_size = sum(len(batch[0]) for batch in test_data_iter)
-training_data_iter = iter(train_loader)
-training_set_size = sum(len(batch[0]) for batch in training_data_iter)
+test_set_size = len(test_loader.dataset)
+training_set_size = len(train_loader.dataset)
 
 print("Size of:")
 print("- Training-set:\t\t{}".format(training_set_size))
@@ -148,6 +112,41 @@ num_channels = 1
 
 # Number of classes, one class for each of 10 digits.
 num_classes = 10
+
+
+def train(epoch, model, optimizer, train_loader):
+    model.train()
+    sys.stdout.flush()  # Just a workaround for a tqdm issue, relevant when cuda is set to False
+    # len(train_loader) is the number of batches in the data-set
+    for batch_idx, (data, target) in tqdm(enumerate(train_loader), total=len(train_loader), unit=' batch'):
+        if cuda:
+            data, target = data.cuda(), target.cuda()
+        data, target = Variable(data), Variable(target)
+        optimizer.zero_grad()
+        prediction = model(data)
+        loss = F.cross_entropy(input=prediction, target=target)
+        loss.backward()
+        optimizer.step()
+
+
+def test(model, test_loader):
+    model.eval()  # Actually necessary if the model includes layers like Dropout or BatchNorm
+    test_loss = 0
+    correct = 0
+    for data, target in test_loader:
+        if cuda:
+            data, target = data.cuda(), target.cuda()
+        # Variable below set to volatile for efficiency, as the model here is used for inference only, no training
+        data, target = Variable(data, volatile=True), Variable(target)
+        prediction = model(data)
+        test_loss += F.cross_entropy(prediction, target, size_average=False).data[0]  # sum up batch loss
+        pred_idx = prediction.data.max(1, keepdim=True)[1]  # get the index of the max score
+        correct += pred_idx.eq(target.data.view_as(pred_idx)).cpu().sum()
+
+    test_loss /= len(test_loader.dataset)
+    print('\nTest set: Average loss: {:.4f}, Accuracy: {}/{} ({:.0f}%)\n'.format(
+        test_loss, correct, len(test_loader.dataset),
+        100. * correct / len(test_loader.dataset)))
 
 
 def plot_images(images, cls_true, cls_pred=None):
@@ -228,6 +227,7 @@ optimizer = optim.Adam(params=sequential_model.parameters(), lr=1e-3)
 print('Training sequential model')
 
 for epoch in range(epochs):
+    print('Epoch {} of {}\n'.format(epoch+1, epochs))
     train(epoch, sequential_model, optimizer, train_loader)
     test(sequential_model, test_loader)
 
@@ -294,6 +294,7 @@ optimizer = optim.Adam(params=functional_model.parameters(), lr=1e-3)
 print('Training functional model')
 
 for epoch in range(epochs):
+    print('Epoch {} of {}\n'.format(epoch+1, epochs))
     train(epoch, functional_model, optimizer, train_loader)
     test(functional_model, test_loader)
 
